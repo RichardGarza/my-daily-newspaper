@@ -1,0 +1,17 @@
+# build output
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+tools/icon-maker/target
+build.log
+
+# yours, not the project's
+.owner
+src-tauri/icons-personal
+Build Richards Daily.command
+.env
+.env.*
+
+# macOS
+.DS_Store
