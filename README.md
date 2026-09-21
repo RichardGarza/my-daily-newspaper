@@ -6,7 +6,7 @@ A newspaper with exactly one subscriber: you. Every morning Claude researches th
 >
 > | | What | Why |
 > |---|---|---|
-> | **Required** | A **Mac** (Apple Silicon or Intel, macOS 12+) | This is the Mac version. Windows is not supported yet. |
+> | **Required** | A **Mac** (Apple Silicon or Intel, macOS 12+) | This is the Mac version. On Windows, use the sister repo: `my-daily-newspaper-windows`. |
 > | **Required** | **[Claude Code](https://claude.com/claude-code)** installed and **signed in with your own Claude subscription** (run `claude`, then `/login`) | Claude is the editor. The app runs the `claude` command that's already on your Mac. No Claude login, no newspaper. |
 > | **Required** | **[Node.js](https://nodejs.org) 20 or newer** | Builds the app. |
 > | Auto-installed | Rust, Apple's command line tools | The builder installs or prompts for both. |
@@ -158,7 +158,7 @@ cargo test --lib e2e_claude -- --ignored --nocapture     # a real Claude run, ~3
 
 ## Known limits
 
-- **Mac only for now.** Morning delivery (LaunchAgent), printing (`lp`) and the builder are macOS-specific. The rest of the app is portable; a Windows version needs those three pieces rewritten.
+- **This repo is the Mac version.** Morning delivery (LaunchAgent), printing (`lp`) and the builder are macOS-specific. The Windows version lives in `my-daily-newspaper-windows`, with those three pieces rewritten for Task Scheduler, Edge + SumatraPDF and PowerShell.
 - MLB only in the score box.
 - If your Claude CLI is old enough to reject one of the optional flags, the app retries with the bare minimum. Same for Grok. If Grok is missing or signed out, the edition still prints and a note at the bottom says why.
 - A YouTube handle that doesn't resolve shows up as a note at the bottom of the edition. Fix it in Edit Interests.
