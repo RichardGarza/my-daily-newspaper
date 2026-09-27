@@ -70,6 +70,7 @@ pub fn build_prompt(
     wire_items: &[WireItem],
     x_posts: &[WireItem],
     x_note: Option<&str>,
+    weather_facts: Option<&str>,
     today_long: &str,
     max_cards: usize,
     paper: &str,
@@ -90,6 +91,13 @@ pub fn build_prompt(
     let videos: Vec<&WireItem> = wire_items.iter().filter(|w| w.kind == "video").collect();
     let articles: Vec<&WireItem> = wire_items.iter().filter(|w| w.kind != "video").collect();
     let to_json = |v: &Vec<&WireItem>| serde_json::to_string(v).unwrap_or_else(|_| "[]".into());
+
+    let weather_block = match weather_facts {
+        Some(facts) => format!(
+            "\nWEATHER DESK - the reader's local weather is out of the ordinary today, and this story MUST run. The wire copy above has one item with beat \"Weather\": use exactly its \"url\" and \"source\", kind \"article\", section \"Front Page\", size \"feature\" (size \"lead\" only when an Extreme or Severe warning is in force or nothing else today comes close). Write it like a local paper's weather story: what is coming, when, how it compares with yesterday, and what to do about it. Every number - temperatures, wind, rain, times - must come from these WEATHER FACTS and nowhere else; do not search for or invent weather figures. One search for local impact (closures, the warning in the news) is fine within your two rounds.\nWEATHER FACTS:\n{facts}\n"
+        ),
+        None => String::new(),
+    };
 
     let x_block = if x_posts.is_empty() {
         format!(
@@ -114,7 +122,7 @@ NEWS (news search feeds, unranked, may contain junk):
 
 X POSTS (from Grok's live X search):
 {x_block}
-
+{weather_block}
 YOUR JOB
 1. Research - fast. The reader is watching a progress bar, and every extra round of tool calls costs them 30-60 seconds. You get exactly TWO research rounds:
    - Round 1: decide every search you need and send them all TOGETHER in one message (up to 10 WebSearch calls at once).
@@ -160,6 +168,7 @@ Your final message must be the JSON object itself and nothing else - no summary 
 {{"tagline":"...","sections":["Front Page","..."],"cards":[{{"kind":"article","size":"lead","section":"Front Page","headline":"...","dek":"...","story":"First paragraph.\n\nSecond paragraph.","source":"Publication or channel name","author":"optional","url":"https://...","video_url":"optional https://www.youtube.com/watch?v=...","article_url":"optional https://...","image":"optional https://...","published":"optional ISO 8601","why":"optional"}}]}}"#,
         videos = to_json(&videos),
         articles = to_json(&articles),
+        weather_block = weather_block,
         lead_min = LEAD_CHARS.0,
         lead_max = LEAD_CHARS.1,
         feature_min = FEATURE_CHARS.0,
@@ -935,7 +944,7 @@ mod tests {
             .into_iter()
             .take(5)
             .collect();
-        let prompt = build_prompt(&interests, &[], &[], Some("Grok CLI not installed"), "today", 12, "Test Daily");
+        let prompt = build_prompt(&interests, &[], &[], Some("Grok CLI not installed"), None, "today", 12, "Test Daily");
         let bin = paths::find_bin("claude", "").await.expect("claude on PATH");
         let cwd = std::env::temp_dir().join("my-daily-newspaper-e2e");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -1024,7 +1033,12 @@ Second line.","source":"S","url":"https://example.com/a"}]}"#;
         let interests = vec![Interest { id: "a".into(), name: "Rockets".into(), kind: "topic".into(), value: "".into(), notes: "big ones".into(), enabled: true },
                              Interest { id: "b".into(), name: "Hidden".into(), kind: "topic".into(), value: "".into(), notes: "".into(), enabled: false }];
         let wire = vec![WireItem { kind: "video".into(), title: "Launch".into(), url: "https://www.youtube.com/watch?v=abcdefghijk".into(), source: "YouTube".into(), beat: "Rockets".into(), ..Default::default() }];
-        let p = build_prompt(&interests, &wire, &[], Some("Grok CLI not installed"), "Friday, September 18, 2026", 30, "Priya\u{2019}s Daily");
+        let p = build_prompt(&interests, &wire, &[], Some("Grok CLI not installed"), None, "Friday, September 18, 2026", 30, "Priya\u{2019}s Daily");
+        assert!(!p.contains("WEATHER DESK"), "a routine day has no weather desk");
+        let stormy = build_prompt(&interests, &wire, &[], None, Some("Today: thunderstorms, high 104°F."), "today", 30, "Priya\u{2019}s Daily");
+        assert!(stormy.contains("WEATHER DESK"));
+        assert!(stormy.contains("high 104°F"));
+        assert!(stormy.contains("section \"Front Page\""));
         assert!(p.contains("editor-in-chief of \"Priya\u{2019}s Daily\""));
         assert!(!p.contains("Richard"));
         assert!(p.contains("brief    520-800 characters"));

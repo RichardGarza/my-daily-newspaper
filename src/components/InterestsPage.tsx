@@ -69,6 +69,15 @@ function ConfirmButton({
   );
 }
 
+const draftOf = (p: Profile): ProfileDraft => ({
+  ownerName: p.ownerName,
+  city: p.city,
+  weatherPlace: p.weatherPlace,
+  weatherLat: p.weatherLat,
+  weatherLon: p.weatherLon,
+  mlbTeamId: p.mlbTeamId,
+});
+
 let seq = 0;
 const newInterest = (): Interest => ({
   id: `new-${Date.now()}-${seq++}`,
@@ -85,8 +94,8 @@ export default function InterestsPage({ onClose, profile, onProfile, firstRun }:
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState<string | null>(null);
-  const [who, setWho] = useState<ProfileDraft>({ ownerName: profile.ownerName, city: profile.city, mlbTeamId: profile.mlbTeamId });
-  const whoDirty = who.ownerName !== profile.ownerName || who.city !== profile.city || who.mlbTeamId !== profile.mlbTeamId;
+  const [who, setWho] = useState<ProfileDraft>(draftOf(profile));
+  const whoDirty = JSON.stringify(who) !== JSON.stringify(draftOf(profile));
 
   useEffect(() => {
     getInterests()
@@ -159,7 +168,7 @@ export default function InterestsPage({ onClose, profile, onProfile, firstRun }:
   const cancel = () => onClose(false);
   const skip = async () => {
     try {
-      onProfile(await setProfile({ ownerName: profile.ownerName, city: profile.city, mlbTeamId: profile.mlbTeamId, onboarded: true }));
+      onProfile(await setProfile({ ...draftOf(profile), onboarded: true }));
     } catch {
       /* the tour can be skipped even if saving that fact fails */
     }

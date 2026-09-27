@@ -124,6 +124,10 @@ export interface Profile {
   /** "Sam's Daily" */
   paperName: string;
   city: string;
+  /** Weather location; empty place and 0,0 = the dateline city, looked up on the fly. */
+  weatherPlace: string;
+  weatherLat: number;
+  weatherLon: number;
   /** MLB team for the score bug; 0 = none. */
   mlbTeamId: number;
   onboarded: boolean;
@@ -132,6 +136,88 @@ export interface Profile {
 export interface PrintStatus {
   printDaily: boolean;
   browserFound: boolean;
+  /** The printer that would be used right now. */
   printer: string | null;
   problem: string | null;
+  /** The printer named in settings; "" = the system default. */
+  printerSetting: string;
+  /** Every printer queue on this Mac. */
+  printers: string[];
+  defaultPrinter: string | null;
+  color: boolean;
+  qr: boolean;
+  duplex: boolean;
+  /** 0 = no cap. */
+  maxPages: number;
+  copies: number;
+}
+
+export interface PrintOptions {
+  printer: string;
+  color: boolean;
+  qr: boolean;
+  duplex: boolean;
+  maxPages: number;
+  copies: number;
+}
+
+// ------------------------------------------------------------------ weather
+
+export interface WeatherPlace {
+  /** "Boise, Idaho, United States" */
+  name: string;
+  lat: number;
+  lon: number;
+  country: string;
+}
+
+export interface WeatherCurrent {
+  temp: number;
+  feelsLike: number;
+  humidity: number;
+  windMph: number;
+  gustsMph: number;
+  code: number;
+  text: string;
+  isDay: boolean;
+}
+
+export interface WeatherDay {
+  date: string;
+  weekday: string;
+  high: number;
+  low: number;
+  code: number;
+  text: string;
+  rainChance: number;
+  precipIn: number;
+  snowIn: number;
+  gustsMph: number;
+  uv: number;
+  sunrise: string;
+  sunset: string;
+}
+
+export interface WeatherAlert {
+  event: string;
+  headline: string;
+  severity: string;
+  description: string;
+  expires: string | null;
+}
+
+export interface WeatherReport {
+  place: string;
+  lat: number;
+  lon: number;
+  updated: string;
+  current: WeatherCurrent;
+  today: WeatherDay;
+  yesterday: WeatherDay | null;
+  days: WeatherDay[];
+  alerts: WeatherAlert[];
+  /** Why today is out of the ordinary; empty on a routine day. */
+  unusual: string[];
+  url: string;
+  source: string;
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Diagnostics, Edition, PrintStatus, Profile, ScheduleInfo, Status } from "./types";
-import { diagnostics, getProfile, getSchedule, loadEdition, onStatus, printEdition, printStatus, refreshEdition, today as fetchToday } from "./api";
+import { diagnostics, getProfile, getSchedule, loadEdition, onStatus, printStatus, refreshEdition, today as fetchToday } from "./api";
 import { longDate, roman, slug } from "./util";
 import PressRoom from "./components/PressRoom";
 import ScoreBug from "./components/ScoreBug";
@@ -8,6 +8,8 @@ import Delivery from "./components/Delivery";
 import FrontPage from "./components/FrontPage";
 import InterestsPage from "./components/InterestsPage";
 import Welcome from "./components/Welcome";
+import PrintDialog from "./components/PrintDialog";
+import Weather from "./components/Weather";
 
 type View = "front" | "interests" | "welcome";
 
@@ -25,7 +27,8 @@ export default function App() {
   const [schedule, setSchedule] = useState<ScheduleInfo | null>(null);
   const [profile, setProfileState] = useState<Profile | null>(null);
   const [print, setPrint] = useState<PrintStatus | null>(null);
-  const [printing, setPrinting] = useState(false);
+  /** Which print dialog is open: the Print button's, or the morning paper's settings. */
+  const [printDialog, setPrintDialog] = useState<"print" | "daily" | null>(null);
   const busy = useRef(false);
   const booted = useRef(false);
 
@@ -130,17 +133,11 @@ export default function App() {
     document.title = paper;
   }, [paper]);
 
-  const makePdf = async () => {
-    setPrinting(true);
+  const openPrint = (mode: "print" | "daily") => {
     setNotice(null);
-    try {
-      await printEdition("preview");
-      setNotice("The paper edition is open in Preview. Print it from there.");
-    } catch (e) {
-      setNotice(String(e));
-    } finally {
-      setPrinting(false);
-    }
+    setPrintDialog(mode);
+    // Printers come and go; re-read them each time the dialog opens.
+    printStatus().then(setPrint).catch(() => {});
   };
 
   const now = new Date();
@@ -162,13 +159,8 @@ export default function App() {
         <div className="utility-right">
           {diag && !diag.claudePath && <span className="utility-warn">Claude CLI not found</span>}
           {view === "front" && edition && (
-            <button
-              className="link-btn"
-              onClick={() => void makePdf()}
-              disabled={printing || refreshing}
-              title={print?.problem ?? "Lay the edition out for paper and open the PDF in Preview"}
-            >
-              {printing ? "Laying out\u2026" : "Print"}
+            <button className="link-btn" onClick={() => openPrint("print")} disabled={refreshing} title="Print the paper edition">
+              Print
             </button>
           )}
           {view === "front" && (
@@ -189,7 +181,8 @@ export default function App() {
           <div className="press-detail">
             {stale && edition ? `Showing ${edition.date} while today\u2019s prints` : "Edited by Claude \u00b7 X wire by Grok"}
           </div>
-          <Delivery schedule={schedule} onChange={setSchedule} print={print} onPrint={setPrint} />
+          {profile && view !== "welcome" && <Weather placeKey={`${profile.city}|${profile.weatherPlace}|${profile.weatherLat}|${profile.weatherLon}`} hasCity={!!profile.city || profile.weatherLat !== 0} />}
+          <Delivery schedule={schedule} onChange={setSchedule} print={print} onPrint={setPrint} onSettings={() => openPrint("daily")} />
         </aside>
 
         <h1
@@ -277,6 +270,17 @@ export default function App() {
             )}
           </div>
         </main>
+      )}
+
+      {printDialog && (
+        <PrintDialog
+          mode={printDialog}
+          status={print}
+          hasEdition={!!edition}
+          onStatus={setPrint}
+          onClose={() => setPrintDialog(null)}
+          onNotice={setNotice}
+        />
       )}
 
       <footer className="colophon">

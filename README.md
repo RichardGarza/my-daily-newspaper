@@ -44,8 +44,9 @@ A welcome page asks three things: your first name, a city for the dateline, and 
 - **The front page.** Text-forward, like a paper: headline, standfirst, byline, then a story Claude actually wrote, so you can read the whole paper without clicking anything. Each story ends in **Read more…**, **See the video…** or **See the post…**; an article about a video gets both buttons. Columns are filled: the editor writes to a character budget per story size (lead 1,500-2,300 characters, features 900-1,350, briefs 520-800, posts 240-420), a copy-desk pass sends back anything that came in short, and the layout drops each story into the shortest column so nothing ends in a hole.
 - **Refresh** (top right) prints a new edition on demand. A new one also prints itself on the first launch of each day.
 - **Press Room** (top right box) narrates the run live: what Claude is searching, a progress bar with a percentage, total time so far, and a rough time left.
-- **Morning delivery** (top left box): pick an hour and the edition is researched in the background every day, with no window and no Dock icon, so it's waiting when you open the app. Tick **and on paper** and it goes to your printer too.
-- **Print** (top right) makes the paper edition now: a PDF preview first, then the printer if you want it.
+- **The weather ear** (top left box, under the date): conditions now, today's high and low, the chance of rain, straight from Open-Meteo, with the National Weather Service's active warnings for US places. Hover for the details and the next three days; click for the full forecast in a reader window. Set the place under **Edit Interests** ("Weather for"), or leave it empty and the dateline city is looked up. On an out-of-the-ordinary day (an official warning, a high of 100°F or more, a 20° swing from yesterday, an inch of rain, a couple of inches of snow, thunderstorms, gusts of 45 mph or more) the ear flags it in red **and the editor is handed the facts and told to write a weather story on the front page**. On a routine day it's just the box.
+- **Morning delivery** (top left box): pick an hour and the edition is researched in the background every day, with no window and no Dock icon, so it's waiting when you open the app. Tick **and on paper** and it goes to your printer too: switching it on opens the print settings (which printer, colour, sides, page cap, copies), and the gear beside it reopens them any time.
+- **Print** (top right) opens the print dialog: pick the printer and options, then **Preview PDF** to look first or **Print now** to send it straight to the printer.
 - **The score box** (top center): your MLB team, straight from MLB's public stats API, no AI involved. During a game: score, inning, who's on base, balls, strikes, outs, and ABS challenges left when the league reports them. Otherwise: the last final, plus the next game as "Dodgers vs. Padres · Today 5:10 PM PDT · SportsNet LA". It's on the printed paper too. Any of the 30 teams, or none.
 - **Edit Interests**: add, remove, edit, reorder or switch off beats. Your name, city and team live at the top of that page.
 - **The reader window.** Click any button, headline or thumbnail and the real page opens in a floating window with a newspaper frame and three buttons: **Ad block · Full screen · Close** (Esc closes too).
@@ -54,8 +55,8 @@ A welcome page asks three things: your first name, a city for the dateline, and 
 
 Printing turns the edition into a proper three-column Letter-size newspaper: masthead, scoreboard, photos in black and white, and a small QR code per story, since paper can't be clicked. Links are named, never spelled out ("Read more on techcrunch.com", "See the video on YouTube"). It prints double-sided and never more than 8 pages.
 
-- **Needs a Chromium-family browser** (Chrome, Edge, Brave, Chromium, Vivaldi) installed in Applications. The app runs it invisibly for a few seconds to make the PDF. It never opens a browser window and never touches your browser profile. If none is installed, everything else still works and the Print button tells you what's missing.
-- Uses your Mac's default printer unless you name one in settings.
+- **Needs a Chromium-family browser** (Chrome, Edge, Brave, Chromium, Vivaldi) installed in Applications. The app runs it invisibly for a few seconds to make the PDF. It never opens a browser window and never touches your browser profile. If none is installed, everything else still works and the Print button tells you what's missing. (Chrome 154's headless mode writes the PDF and then never quits, so the app watches for the finished file and stops the browser itself.)
+- Uses your Mac's default printer unless you pick one in the print dialog.
 - Automatic printing happens once a day at most, and only as part of the scheduled morning run. If the Mac was off and the run happens more than 6 hours late, it skips the paper rather than printing yesterday's news at dinner time.
 - PDFs are kept for 14 days in the data folder under `print/`.
 
@@ -64,6 +65,7 @@ Printing turns the edition into a proper three-column Letter-size newspaper: mas
 | Step | Who | What | Time |
 |---|---|---|---|
 | 1. Wire | Rust | YouTube channel feeds and news search feeds for every enabled interest. Links are real by construction. | seconds |
+| 1b. Weather | Rust | Open-Meteo forecast and NWS alerts for your place, alongside step 1. On an unusual day the facts become a must-run item for the editor. | seconds |
 | 2. X wire | `grok -p` | Grok Build CLI searches X for posts you'd like. Runs alongside step 1, on your SuperGrok login. Optional. | ~1 min |
 | 3. Editor | `claude -p` | Gets your interests plus the wire copy, researches in two parallel rounds, picks the stories and writes each one to length. Sonnet at low effort by default: fast and light on your plan. | 1.5-3 min |
 | 3b. Copy desk | `claude -p --resume` | Only if stories came in under length: the same session is asked to fill them out. | 0-40 s |
@@ -94,6 +96,7 @@ Everything lives in `~/Library/Application Support/com.mydailynewspaper.app/`. N
 | Key | Default | Meaning |
 |---|---|---|
 | `ownerName`, `city`, `mlbTeamId` | builder's name, Los Angeles, 119 | The welcome page values. `mlbTeamId` 0 hides the score box. |
+| `weatherPlace`, `weatherLat`, `weatherLon` | *(empty, 0, 0 = look up `city`)* | Where the weather ear is for. Set from "Weather for" under Edit Interests. |
 | `claudeModel` | *(empty = sonnet)* | `opus`, or `default` for whatever your CLI is set to |
 | `claudeEffort` | `low` | `medium`, `high`, or `default` |
 | `maxCards` | 30 | Upper bound on stories per edition |
@@ -101,11 +104,12 @@ Everything lives in `~/Library/Application Support/com.mydailynewspaper.app/`. N
 | `blockAds` | true | Ad blocking in reader windows |
 | `readerAlwaysOnTop` | true | Reader floats above other windows |
 | `printDaily` | false | The "and on paper" switch |
-| `printer` | *(empty = system default)* | Name as `lpstat -e` lists it |
+| `printer` | *(empty = system default)* | Name as `lpstat -e` lists it. The print dialog sets it. |
 | `printColor` | false | Colour photos on paper |
 | `printQr` | true | QR code per story |
 | `printDuplex` | true | Double-sided |
 | `printMaxPages` | 8 | Never send more than this. 0 = no cap |
+| `printCopies` | 1 | Copies per morning |
 | `chromeBin` | *(empty = auto-detect)* | Path to the browser that makes the PDF |
 | `claudeBin`, `grokBin` | *(empty = auto-detect)* | Absolute paths, if the app can't find them |
 | `claudeTimeoutSecs`, `grokTimeoutSecs` | 600, 240 | Hard stops |
@@ -127,7 +131,10 @@ src/                               React front page
   components/StoryCard             article / video / post cards
   components/PressRoom             live status, percentage, elapsed time
   components/ScoreBug              the score box
+  components/Weather               the weather ear
   components/Delivery              Morning delivery + "and on paper"
+  components/PrintDialog           printer, colour, sides, page cap; preview or print now
+  components/ProfileFields         name, city, weather place, ball team
   components/Welcome               first-run page
   components/InterestsPage         your paper + your beats
   mock.ts                          sample copy for browser-only dev
@@ -138,6 +145,7 @@ src-tauri/src/
   wire.rs                          feeds, channel-handle lookup, share images
   print.rs                         paper edition: HTML, PDF, printer
   scores.rs                        MLB score box
+  weather.rs                       Open-Meteo + NWS alerts, what counts as unusual, the weather wire item
   schedule.rs                      Morning delivery (macOS LaunchAgent)
   reader.rs, reader_inject.js      the reader window and its frame
   adblock.rs                       ad-tech domain list + blocking rules
@@ -146,7 +154,7 @@ src-tauri/src/
 src-tauri/resources/default-interests.json   the starter beats new readers see
 ```
 
-UI only, no backend, sample copy (handy for restyling): `npm run dev`, open http://localhost:1420. Add `?live=1` for a live game in the score box, `?welcome=1` for the first-run pages, `?empty=1` for the no-edition state.
+UI only, no backend, sample copy (handy for restyling): `npm run dev`, open http://localhost:1420. Add `?live=1` for a live game in the score box, `?storm=1` for an unusual-weather day in the weather ear, `?noweather=1` for no place set, `?welcome=1` for the first-run pages, `?empty=1` for the no-edition state.
 
 ## Tests
 
@@ -154,12 +162,14 @@ UI only, no backend, sample copy (handy for restyling): `npm run dev`, open http
 cd src-tauri
 cargo test --lib                                         # unit tests, no network
 cargo test --lib e2e_claude -- --ignored --nocapture     # a real Claude run, ~3 min, uses your plan
+cargo test --lib browser -- --ignored                    # a real Chrome run: PDF written, browser stopped
 ```
 
 ## Known limits
 
 - **This repo is the Mac version.** Morning delivery (LaunchAgent), printing (`lp`) and the builder are macOS-specific. The Windows version lives in `my-daily-newspaper-windows`, with those three pieces rewritten for Task Scheduler, Edge + SumatraPDF and PowerShell.
 - MLB only in the score box.
+- Weather warnings come from the National Weather Service, so they're US-only. The forecast itself (Open-Meteo) is worldwide. What counts as "unusual" is a fixed set of thresholds, not a climate model: a 30°F day in Boise in January doesn't make the paper.
 - If your Claude CLI is old enough to reject one of the optional flags, the app retries with the bare minimum. Same for Grok. If Grok is missing or signed out, the edition still prints and a note at the bottom says why.
 - A YouTube handle that doesn't resolve shows up as a note at the bottom of the edition. Fix it in Edit Interests.
 - Video stories are written from the description and coverage Claude found, not from watching the video. The prompt forbids invented quotes.

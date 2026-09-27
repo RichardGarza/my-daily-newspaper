@@ -138,6 +138,9 @@ pub fn profile(app: &AppHandle) -> crate::model::Profile {
         paper_name: paper_name(&owner),
         owner_name: owner,
         city: settings.city.trim().to_string(),
+        weather_place: settings.weather_place.trim().to_string(),
+        weather_lat: settings.weather_lat,
+        weather_lon: settings.weather_lon,
         mlb_team_id: settings.mlb_team_id,
         onboarded: settings.onboarded,
     }

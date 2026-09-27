@@ -3,6 +3,8 @@
 //    edition to screen before you open the app. Picking a time turns it on
 //    (the job itself is the only place the time is stored).
 //  - ...and on paper: after that morning run, send it to the printer too.
+//    Switching it on opens the print settings (which printer, colour, sides);
+//    the gear beside it reopens them later.
 // Nothing to paste into a terminal.
 
 import { useState } from "react";
@@ -17,9 +19,11 @@ interface Props {
   onChange: (s: ScheduleInfo) => void;
   print: PrintStatus | null;
   onPrint: (p: PrintStatus) => void;
+  /** Open the print settings dialog (printer, colour, sides, page cap). */
+  onSettings: () => void;
 }
 
-export default function Delivery({ schedule, onChange, print, onPrint }: Props) {
+export default function Delivery({ schedule, onChange, print, onPrint, onSettings }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +41,12 @@ export default function Delivery({ schedule, onChange, print, onPrint }: Props) 
     }
   };
   const apply = (enabled: boolean, hour: number) => run(async () => onChange(await setSchedule(enabled, hour, 0)));
-  const paper = (enabled: boolean) => run(async () => onPrint(await setPrintDaily(enabled)));
+  const paper = (enabled: boolean) =>
+    run(async () => {
+      onPrint(await setPrintDaily(enabled));
+      // First time on: confirm which printer and how before the morning it matters.
+      if (enabled) onSettings();
+    });
 
   const paperTip = print?.problem
     ? print.problem
@@ -64,6 +73,11 @@ export default function Delivery({ schedule, onChange, print, onPrint }: Props) 
             <input type="checkbox" checked={print.printDaily} disabled={busy || !schedule.enabled} onChange={(e) => void paper(e.target.checked)} />
             <span>and on paper{print.printDaily && print.problem ? " (!)" : ""}</span>
           </label>
+          {print.printDaily && (
+            <button className="gear-btn" type="button" onClick={onSettings} disabled={busy} title="Printer and paper settings" aria-label="Printer and paper settings">
+              {"\u2699\uFE0E"}
+            </button>
+          )}
         </div>
       )}
       {(error || (print?.printDaily && print.problem)) && <div className="delivery-error">{error ?? print?.problem}</div>}

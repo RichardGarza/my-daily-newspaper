@@ -17,12 +17,12 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use chrono::{Local, NaiveDate};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::model::{Card, Edition, Settings};
 use crate::scores::{self, ScoreBug};
-use crate::{paths, schedule, store, wire};
+use crate::{paths, schedule, store, weather, wire};
 
 const MASTHEAD_FONT: &[u8] = include_bytes!("../../src/assets/fonts/Chomsky.woff2");
 
@@ -39,18 +39,77 @@ pub struct PrintStatus {
     pub printer: Option<String>,
     /// Why printing can't work right now, if it can't.
     pub problem: Option<String>,
+
+    // --- the knobs in the print dialog ---
+    /// The printer named in settings; empty = the system default.
+    pub printer_setting: String,
+    /// Every printer this Mac knows about, as `lpstat -e` names them.
+    pub printers: Vec<String>,
+    /// The system default printer, if macOS reports one.
+    pub default_printer: Option<String>,
+    pub color: bool,
+    pub qr: bool,
+    pub duplex: bool,
+    /// 0 = no cap.
+    pub max_pages: u32,
+    pub copies: u32,
+}
+
+/// What the print dialog can change. Saved to settings.json.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintOptions {
+    /// Empty = the system default printer.
+    pub printer: String,
+    pub color: bool,
+    pub qr: bool,
+    pub duplex: bool,
+    pub max_pages: u32,
+    pub copies: u32,
 }
 
 pub async fn status(app: &AppHandle) -> PrintStatus {
     let settings = store::load_settings(app);
     let browser_found = find_browser(&settings).is_some();
+    let printers = list_printers().await;
+    let default_printer = system_default_printer().await;
     let printer = pick_printer(&settings).await;
     let problem = if !browser_found {
         Some("Printing needs Google Chrome (or Edge / Brave) installed to make the PDF.".to_string())
     } else {
         printer.as_ref().err().cloned()
     };
-    PrintStatus { print_daily: settings.print_daily, browser_found, printer: printer.ok(), problem }
+    PrintStatus {
+        print_daily: settings.print_daily,
+        browser_found,
+        printer: printer.ok(),
+        problem,
+        printer_setting: settings.printer.trim().to_string(),
+        printers,
+        default_printer,
+        color: settings.print_color,
+        qr: settings.print_qr,
+        duplex: settings.print_duplex,
+        max_pages: settings.print_max_pages,
+        copies: settings.print_copies.max(1),
+    }
+}
+
+/// Save the dialog's choices. A printer that isn't on the list any more is
+/// dropped back to the system default rather than failing every morning.
+pub async fn set_options(app: &AppHandle, options: PrintOptions) -> Result<PrintStatus, String> {
+    let printers = list_printers().await;
+    let printer = options.printer.trim().to_string();
+    let printer = if printer.is_empty() || printers.is_empty() || printers.iter().any(|p| p == &printer) { printer } else { String::new() };
+    store::update_settings(app, |s| {
+        s.printer = printer;
+        s.print_color = options.color;
+        s.print_qr = options.qr;
+        s.print_duplex = options.duplex;
+        s.print_max_pages = options.max_pages;
+        s.print_copies = options.copies.clamp(1, 9);
+    })?;
+    Ok(status(app).await)
 }
 
 // --------------------------------------------------------------------- HTML
@@ -123,12 +182,14 @@ pub struct RenderOptions {
     pub city: String,
     /// Last game and next game for the owner's team, when there is one.
     pub score: Option<ScoreBug>,
+    /// "Sunny · High 88° Low 63°", when a weather place is set.
+    pub weather: Option<String>,
 }
 
 impl RenderOptions {
     #[cfg(test)]
     fn plain(color: bool, qr: bool) -> Self {
-        Self { color, qr, paper: "Priya\u{2019}s Daily".into(), city: "Boise".into(), score: None }
+        Self { color, qr, paper: "Priya\u{2019}s Daily".into(), city: "Boise".into(), score: None, weather: Some("Sunny · High 88° Low 63°".into()) }
     }
 }
 
@@ -364,11 +425,12 @@ pub fn render_html(edition: &Edition, opts: &RenderOptions) -> String {
         ),
     };
     html.push_str(&format!(
-        "<header class=\"masthead\"><div class=\"ear\"><span class=\"lab\">Today's Edition</span><b>{date}</b><i>{n} stories · printed {printed}</i></div>\
+        "<header class=\"masthead\"><div class=\"ear\"><span class=\"lab\">Today's Edition</span><b>{date}</b><i>{n} stories · printed {printed}</i>{weather}</div>\
          <h1 class=\"nameplate\">{paper}</h1>{right_ear}</header>",
         date = esc(&date),
         n = edition.cards.len(),
         printed = esc(&printed),
+        weather = opts.weather.as_deref().map(|w| format!("<i>{}</i>", esc(w))).unwrap_or_default(),
         paper = esc(&opts.paper),
     ));
     let place = if opts.city.trim().is_empty() { date.clone() } else { format!("{}, {}", opts.city.trim(), date) };
@@ -451,6 +513,9 @@ fn print_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// A PDF smaller than this is Chrome's error page, not the paper.
+const MIN_PDF_BYTES: u64 = 2_000;
+
 /// One headless run of the browser: page in, PDF out.
 ///
 /// The profile folder is new for every run and lives in the system temp
@@ -460,7 +525,16 @@ fn print_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// "Failed to create a ProcessSingleton for your profile directory" and prints
 /// nothing. Without any private profile, a headless launch just pokes the
 /// Chrome that's already open and exits.
+///
+/// The finished file is the signal that the job is done, not the browser
+/// exiting. Chrome 154's headless mode writes the PDF within seconds and then
+/// stays alive indefinitely, even for a one-line page, so waiting for it to
+/// quit meant every print ran into the 90-second limit. Once the PDF exists
+/// and has stopped growing, the browser is stopped from here. A browser that
+/// does quit on its own still works the same way.
 async fn browser_to_pdf(browser: &Path, page_url: &str, pdf_path: &Path, attempt: u32) -> Result<(), String> {
+    use tokio::io::AsyncReadExt as _;
+
     let profile = std::env::temp_dir().join(format!("mdn-print-{}-{}-{attempt}", std::process::id(), chrono::Utc::now().timestamp_millis()));
     let _ = std::fs::remove_file(pdf_path);
 
@@ -486,19 +560,50 @@ async fn browser_to_pdf(browser: &Path, page_url: &str, pdf_path: &Path, attempt
         cmd.arg("--no-sandbox");
     }
 
-    let result = tokio::time::timeout(Duration::from_secs(90), cmd.output()).await;
+    let mut child = cmd.spawn().map_err(|e| format!("Couldn't start {}: {e}", browser.display()))?;
+    // Drain stderr as it comes, so a chatty browser can't stall on a full pipe.
+    let stderr = child.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        let mut text = String::new();
+        if let Some(mut s) = stderr {
+            let _ = s.read_to_string(&mut text).await;
+        }
+        text
+    });
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let mut last_size = 0u64;
+    let mut unchanged = 0u32;
+    let mut exited = false;
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            exited = true;
+            break;
+        }
+        let size = std::fs::metadata(pdf_path).map(|m| m.len()).unwrap_or(0);
+        unchanged = if size >= MIN_PDF_BYTES && size == last_size { unchanged + 1 } else { 0 };
+        last_size = size;
+        // The same size for a full second: the file is written.
+        if unchanged >= 4 || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    if !exited {
+        let _ = child.kill().await;
+    }
+    let stderr_text = tokio::time::timeout(Duration::from_secs(2), stderr_task).await.ok().and_then(|r| r.ok()).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&profile);
-    let out = result
-        .map_err(|_| "The browser took more than 90 seconds to make the PDF.".to_string())?
-        .map_err(|e| format!("Couldn't start {}: {e}", browser.display()))?;
 
     let size = std::fs::metadata(pdf_path).map(|m| m.len()).unwrap_or(0);
-    if size < 2_000 {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let tail: Vec<&str> = err.lines().rev().take(3).collect();
-        return Err(format!("The browser didn't produce a PDF. {}", wire::truncate(&tail.join(" | "), 300)));
+    if size >= MIN_PDF_BYTES {
+        return Ok(());
     }
-    Ok(())
+    if !exited {
+        return Err("The browser took more than 90 seconds to make the PDF.".to_string());
+    }
+    let tail: Vec<&str> = stderr_text.lines().rev().take(3).collect();
+    Err(format!("The browser didn't produce a PDF. {}", wire::truncate(&tail.join(" | "), 300)))
 }
 
 /// Render the edition and have the browser print it to a PDF. Returns the PDF path.
@@ -515,12 +620,18 @@ pub async fn make_pdf(app: &AppHandle, edition: &Edition) -> Result<PathBuf, Str
     } else {
         tokio::time::timeout(Duration::from_secs(8), scores::fetch(&wire::http_client(), settings.mlb_team_id)).await.ok().and_then(|r| r.ok())
     };
+    let weather = tokio::time::timeout(Duration::from_secs(8), weather::report(&wire::http_client(), &settings))
+        .await
+        .ok()
+        .and_then(|r| r.ok().flatten())
+        .map(|r| weather::ear_line(&r));
     let opts = RenderOptions {
         color: settings.print_color,
         qr: settings.print_qr,
         paper: store::paper_name(&store::owner_name(&settings)),
         city: settings.city.clone(),
         score,
+        weather,
     };
     let html = render_html(edition, &opts);
     std::fs::write(&html_path, html).map_err(|e| format!("Couldn't write {}: {e}", html_path.display()))?;
@@ -584,25 +695,38 @@ pub fn parse_default_printer(lpstat_d: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// Every printer queue on this Mac, in `lpstat -e` order. Empty if lpstat fails.
+pub async fn list_printers() -> Vec<String> {
+    match run("lpstat", &["-e"]).await {
+        Ok((_, list, _)) => list.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The printer macOS calls the default, if it names one. ("Last Printer
+/// Used" in System Settings means it doesn't.)
+pub async fn system_default_printer() -> Option<String> {
+    let (_, out, _) = run("lpstat", &["-d"]).await.ok()?;
+    parse_default_printer(&out)
+}
+
 /// The printer to use: settings.json -> system default -> the only printer there is.
 pub async fn pick_printer(settings: &Settings) -> Result<String, String> {
     let named = settings.printer.trim();
     if !named.is_empty() {
         return Ok(named.to_string());
     }
-    let (_, out, _) = run("lpstat", &["-d"]).await?;
-    if let Some(p) = parse_default_printer(&out) {
+    if let Some(p) = system_default_printer().await {
         return Ok(p);
     }
     // macOS set to "Last Printer Used" reports no default. If there's exactly
     // one printer, that's the one.
-    let (_, list, _) = run("lpstat", &["-e"]).await?;
-    let printers: Vec<&str> = list.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    let printers = list_printers().await;
     match printers.as_slice() {
         [] => Err("No printer is set up on this Mac (System Settings > Printers & Scanners).".into()),
         [only] => Ok(only.to_string()),
         many => Err(format!(
-            "There are {} printers and no default. Pick a default in System Settings > Printers & Scanners, or put one of these in settings.json as \"printer\": {}",
+            "There are {} printers and no default. Pick one in the print settings (the gear next to \"and on paper\"), or a default in System Settings > Printers & Scanners: {}",
             many.len(),
             many.join(", ")
         )),
@@ -619,6 +743,10 @@ pub fn lp_args(printer: &str, pdf: &Path, title: &str, settings: &Settings) -> V
     a.push(if settings.print_duplex { "sides=two-sided-long-edge" } else { "sides=one-sided" }.into());
     a.push("-o".into());
     a.push("media=Letter".into());
+    if settings.print_copies > 1 {
+        a.push("-n".into());
+        a.push(settings.print_copies.to_string());
+    }
     a.push(pdf.display().to_string());
     a
 }
@@ -762,6 +890,26 @@ mod tests {
         assert!(html.contains("Read more"));
     }
 
+    /// Real browser, real PDF, and the browser is stopped once the file is
+    /// written instead of waiting for it to quit (Chrome 154 never does).
+    /// Opt-in because it needs Chrome: `cargo test -- --ignored browser`.
+    #[tokio::test]
+    #[ignore]
+    async fn browser_writes_a_pdf_and_is_stopped() {
+        let Some(browser) = find_browser(&Settings::default()) else { return };
+        let dir = std::env::temp_dir().join(format!("mdn-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let html = dir.join("page.html");
+        std::fs::write(&html, "<html><body><h1>Hello, paper</h1></body></html>").unwrap();
+        let pdf = dir.join("page.pdf");
+        let page = url::Url::from_file_path(&html).unwrap();
+        let started = std::time::Instant::now();
+        browser_to_pdf(&browser, page.as_str(), &pdf, 0).await.unwrap();
+        assert!(std::fs::metadata(&pdf).unwrap().len() > MIN_PDF_BYTES);
+        assert!(started.elapsed() < Duration::from_secs(45), "took {:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn printer_and_lp_arguments() {
         assert_eq!(parse_default_printer("system default destination: HP_LaserJet_M110w\n").as_deref(), Some("HP_LaserJet_M110w"));
@@ -771,7 +919,14 @@ mod tests {
         assert_eq!(a[0..2], ["-d".to_string(), "HP".to_string()]);
         assert!(a.contains(&"page-ranges=1-8".to_string()));
         assert!(a.contains(&"sides=two-sided-long-edge".to_string()));
+        assert!(!a.contains(&"-n".to_string()), "one copy needs no -n");
         assert_eq!(a.last().unwrap(), "/tmp/x y.pdf");
+
+        let two = Settings { print_copies: 2, print_duplex: false, print_max_pages: 0, ..Settings::default() };
+        let a = lp_args("HP", Path::new("/tmp/x.pdf"), "t", &two);
+        assert!(a.windows(2).any(|w| w == ["-n", "2"]));
+        assert!(a.contains(&"sides=one-sided".to_string()));
+        assert!(!a.iter().any(|x| x.starts_with("page-ranges")));
     }
 
     #[test]

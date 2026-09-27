@@ -4,8 +4,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Diagnostics, Edition, InterestsFile, PrintStatus, Profile, ScheduleInfo, ScoreBugData, Status } from "./types";
-import { mockEdition, mockInterests, mockScore, mockScript } from "./mock";
+import type { Diagnostics, Edition, InterestsFile, PrintOptions, PrintStatus, Profile, ScheduleInfo, ScoreBugData, Status, WeatherPlace, WeatherReport } from "./types";
+import { mockEdition, mockInterests, mockPlaces, mockScore, mockScript, mockWeather } from "./mock";
 
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -107,6 +107,9 @@ let mockProfile: Profile = {
   ownerName: "Sam",
   paperName: "Sam\u2019s Daily",
   city: "Los Angeles",
+  weatherPlace: "",
+  weatherLat: 0,
+  weatherLon: 0,
   mlbTeamId: 119,
   onboarded: true,
 };
@@ -120,17 +123,57 @@ export async function getProfile(): Promise<Profile> {
   return mockProfile;
 }
 
-export async function setProfile(p: { ownerName: string; city: string; mlbTeamId: number; onboarded: boolean }): Promise<Profile> {
-  if (inTauri) return invoke<Profile>("set_profile", p);
+export interface ProfileInput {
+  ownerName: string;
+  city: string;
+  weatherPlace: string;
+  weatherLat: number;
+  weatherLon: number;
+  mlbTeamId: number;
+  onboarded: boolean;
+}
+
+export async function setProfile(p: ProfileInput): Promise<Profile> {
+  if (inTauri) return invoke<Profile>("set_profile", { ...p });
   const name = p.ownerName.trim();
   mockProfile = { ...p, ownerName: name, paperName: name ? `${name}\u2019s Daily` : "My Daily" };
   if (p.onboarded) sessionStorage.setItem("rd-welcomed", "1");
   return mockProfile;
 }
 
+// ----------------------------------------------------------------- weather
+
+/** Conditions and the week ahead for the reader's place; null when no place is set. */
+export async function weather(): Promise<WeatherReport | null> {
+  if (inTauri) return invoke<WeatherReport | null>("weather");
+  await sleep(300);
+  return params().has("noweather") ? null : mockWeather(params().has("storm"));
+}
+
+/** Places matching what was typed into the weather location box. */
+export async function geocode(query: string): Promise<WeatherPlace[]> {
+  if (inTauri) return invoke<WeatherPlace[]>("geocode", { query });
+  await sleep(200);
+  const q = query.trim().toLowerCase();
+  return q.length < 2 ? [] : mockPlaces.filter((p) => p.name.toLowerCase().includes(q));
+}
+
 // ---------------------------------------------------------------- printing
 
-let mockPrint: PrintStatus = { printDaily: false, browserFound: true, printer: "Sample_LaserJet", problem: null };
+let mockPrint: PrintStatus = {
+  printDaily: false,
+  browserFound: true,
+  printer: "Sample_LaserJet",
+  problem: null,
+  printerSetting: "",
+  printers: ["Sample_LaserJet", "Upstairs_Inkjet"],
+  defaultPrinter: "Sample_LaserJet",
+  color: false,
+  qr: true,
+  duplex: true,
+  maxPages: 8,
+  copies: 1,
+};
 
 export async function printStatus(): Promise<PrintStatus> {
   if (inTauri) return invoke<PrintStatus>("print_status");
@@ -140,6 +183,12 @@ export async function printStatus(): Promise<PrintStatus> {
 export async function setPrintDaily(enabled: boolean): Promise<PrintStatus> {
   if (inTauri) return invoke<PrintStatus>("set_print_daily", { enabled });
   mockPrint = { ...mockPrint, printDaily: enabled };
+  return mockPrint;
+}
+
+export async function setPrintOptions(options: PrintOptions): Promise<PrintStatus> {
+  if (inTauri) return invoke<PrintStatus>("set_print_options", { options });
+  mockPrint = { ...mockPrint, ...options, printerSetting: options.printer, printer: options.printer || mockPrint.defaultPrinter };
   return mockPrint;
 }
 

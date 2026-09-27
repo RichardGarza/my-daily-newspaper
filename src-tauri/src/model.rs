@@ -79,6 +79,10 @@ pub struct Settings {
     pub owner_name: String,
     /// City for the dateline. Empty = no city.
     pub city: String,
+    /// Where the weather is for. Empty place and 0,0 = look the dateline city up.
+    pub weather_place: String,
+    pub weather_lat: f64,
+    pub weather_lon: f64,
     /// The welcome pages have been seen (or skipped).
     pub onboarded: bool,
 
@@ -94,6 +98,8 @@ pub struct Settings {
     pub print_duplex: bool,
     /// Never send more than this many pages to the printer. 0 = no cap.
     pub print_max_pages: u32,
+    /// Copies per morning. 1 unless you share the paper.
+    pub print_copies: u32,
     /// Chromium-family browser used to make the PDF. Empty = auto-detect.
     pub chrome_bin: String,
 }
@@ -114,6 +120,9 @@ impl Default for Settings {
             block_ads: true,
             owner_name: String::new(),
             city: "Los Angeles".into(),
+            weather_place: String::new(),
+            weather_lat: 0.0,
+            weather_lon: 0.0,
             onboarded: false,
             print_daily: false,
             printer: String::new(),
@@ -121,6 +130,7 @@ impl Default for Settings {
             print_qr: true,
             print_duplex: true,
             print_max_pages: 8,
+            print_copies: 1,
             chrome_bin: String::new(),
         }
     }
@@ -247,6 +257,10 @@ pub struct Profile {
     /// "Sam's Daily"
     pub paper_name: String,
     pub city: String,
+    /// Weather location; empty place and 0,0 = the dateline city.
+    pub weather_place: String,
+    pub weather_lat: f64,
+    pub weather_lon: f64,
     pub mlb_team_id: u32,
     pub onboarded: bool,
 }

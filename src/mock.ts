@@ -1,7 +1,7 @@
 // Sample data for running the front page in a plain browser (`npm run dev`)
 // without the Tauri backend. Everything here is placeholder copy.
 
-import type { Edition, InterestsFile, ScoreBugData, Status } from "./types";
+import type { Edition, InterestsFile, ScoreBugData, Status, WeatherPlace, WeatherReport } from "./types";
 
 const ph = (label: string, w = 960, h = 540) =>
   "data:image/svg+xml;utf8," +
@@ -122,3 +122,58 @@ export const mockScore = (live: boolean): ScoreBugData =>
           tv: ["SportsNet LA", "FOX"],
         },
       };
+
+// ------------------------------------------------------------------ weather
+
+export const mockPlaces: WeatherPlace[] = [
+  { name: "Boise, Idaho, United States", lat: 43.6135, lon: -116.2035, country: "us" },
+  { name: "Los Angeles, California, United States", lat: 34.0522, lon: -118.2437, country: "us" },
+  { name: "Boston, Massachusetts, United States", lat: 42.3601, lon: -71.0589, country: "us" },
+  { name: "Bordeaux, Nouvelle-Aquitaine, France", lat: 44.8378, lon: -0.5792, country: "fr" },
+];
+
+/** A quiet day, or (`?storm=1`) a heat advisory with thunderstorms. */
+export const mockWeather = (storm: boolean): WeatherReport => {
+  const day = (offset: number, high: number, low: number, code: number, text: string, rain: number): WeatherReport["today"] => {
+    const d = new Date(Date.now() + offset * 86400_000);
+    return {
+      date: d.toLocaleDateString("en-CA"),
+      weekday: d.toLocaleDateString("en-US", { weekday: "short" }),
+      high,
+      low,
+      code,
+      text,
+      rainChance: rain,
+      precipIn: rain > 50 ? 0.8 : 0,
+      snowIn: 0,
+      gustsMph: storm ? 48 : 14,
+      uv: 6,
+      sunrise: "6:48 AM",
+      sunset: "6:49 PM",
+    };
+  };
+  const today = storm ? day(0, 104, 78, 95, "Thunderstorms", 70) : day(0, 79, 58, 2, "Partly cloudy", 5);
+  return {
+    place: "Los Angeles, California, United States",
+    lat: 34.05,
+    lon: -118.24,
+    updated: new Date().toISOString(),
+    current: {
+      temp: storm ? 97 : 71,
+      feelsLike: storm ? 103 : 70,
+      humidity: storm ? 55 : 40,
+      windMph: storm ? 22 : 6,
+      gustsMph: storm ? 41 : 11,
+      code: storm ? 95 : 2,
+      text: storm ? "Thunderstorms" : "Partly cloudy",
+      isDay: true,
+    },
+    today,
+    yesterday: day(-1, 84, 60, 0, "Sunny", 0),
+    days: [today, day(1, 74, 56, 61, "Light rain", 60), day(2, 72, 55, 3, "Overcast", 30), day(3, 76, 57, 1, "Mostly sunny", 5)],
+    alerts: storm ? [{ event: "Heat Advisory", headline: "Heat Advisory until 8 PM PDT this evening", severity: "Moderate", description: "Hot.", expires: null }] : [],
+    unusual: storm ? ["Heat Advisory in force (moderate)", "a high of 104°F", "a 20° jump from yesterday's high of 84°F", "thunderstorms", "gusts to 48 mph"] : [],
+    url: "https://forecast.weather.gov/MapClick.php?lat=34.0522&lon=-118.2437",
+    source: storm ? "National Weather Service" : "Open-Meteo",
+  };
+};

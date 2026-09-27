@@ -19,6 +19,7 @@ mod reader;
 mod schedule;
 mod scores;
 mod store;
+mod weather;
 mod wire;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,6 +124,19 @@ async fn score_bug(app: AppHandle) -> Result<scores::ScoreBug, String> {
     scores::fetch(&wire::http_client(), team).await
 }
 
+/// Conditions now and the week ahead for the reader's place. None = no place set.
+#[tauri::command]
+async fn weather(app: AppHandle) -> Result<Option<weather::Report>, String> {
+    let settings = store::load_settings(&app);
+    weather::report(&wire::http_client(), &settings).await
+}
+
+/// Places matching what the reader typed into the weather location box.
+#[tauri::command]
+async fn geocode(query: String) -> Result<Vec<weather::Place>, String> {
+    weather::geocode(&wire::http_client(), &query).await
+}
+
 #[tauri::command]
 fn get_profile(app: AppHandle) -> Profile {
     store::profile(&app)
@@ -130,11 +144,24 @@ fn get_profile(app: AppHandle) -> Profile {
 
 /// Saved from the welcome page and from Edit Interests.
 #[tauri::command]
-fn set_profile(app: AppHandle, owner_name: String, city: String, mlb_team_id: u32, onboarded: bool) -> Result<Profile, String> {
+fn set_profile(
+    app: AppHandle,
+    owner_name: String,
+    city: String,
+    weather_place: String,
+    weather_lat: f64,
+    weather_lon: f64,
+    mlb_team_id: u32,
+    onboarded: bool,
+) -> Result<Profile, String> {
     let clean = |s: &str, max: usize| s.trim().chars().filter(|c| !c.is_control()).take(max).collect::<String>();
+    let on_earth = weather_lat.is_finite() && weather_lon.is_finite() && weather_lat.abs() <= 90.0 && weather_lon.abs() <= 180.0;
     store::update_settings(&app, |s| {
         s.owner_name = clean(&owner_name, 40);
         s.city = clean(&city, 60);
+        s.weather_place = clean(&weather_place, 120);
+        s.weather_lat = if on_earth { weather_lat } else { 0.0 };
+        s.weather_lon = if on_earth { weather_lon } else { 0.0 };
         s.mlb_team_id = mlb_team_id;
         s.onboarded = onboarded;
     })?;
@@ -154,6 +181,12 @@ async fn print_status(app: AppHandle) -> Result<print::PrintStatus, String> {
 async fn set_print_daily(app: AppHandle, enabled: bool) -> Result<print::PrintStatus, String> {
     store::update_settings(&app, |s| s.print_daily = enabled)?;
     Ok(print::status(&app).await)
+}
+
+/// The print dialog's knobs: printer, colour, QR codes, sides, page cap, copies.
+#[tauri::command]
+async fn set_print_options(app: AppHandle, options: print::PrintOptions) -> Result<print::PrintStatus, String> {
+    print::set_options(&app, options).await
 }
 
 /// The Print button. "preview" opens the PDF so you can look before spending
@@ -259,7 +292,23 @@ async fn build_edition(app: &AppHandle) -> Result<Edition, String> {
             },
         }
     };
-    let (wire_result, grok_result) = tokio::join!(wire_fut, grok_fut);
+    // The weather ear, and a story if today is out of the ordinary.
+    let weather_fut = async {
+        match weather::report(&client, &settings).await {
+            Ok(r) => r,
+            Err(e) => {
+                emit_status(app, "wire", "No weather this morning", Some(e));
+                None
+            }
+        }
+    };
+    let (wire_result, grok_result, weather_report) = tokio::join!(wire_fut, grok_fut, weather_fut);
+    let weather_story = weather_report.as_ref().filter(|r| !r.unusual.is_empty());
+    let mut wire_items = wire_result.items.clone();
+    if let Some(r) = weather_story {
+        emit_status(app, "wire", "Weather desk", Some(format!("Out of the ordinary: {}", r.unusual.join(", "))));
+        wire_items.push(weather::wire_item(r));
+    }
 
     emit_status(
         app,
@@ -275,9 +324,10 @@ async fn build_edition(app: &AppHandle) -> Result<Edition, String> {
     // 3: the editor.
     let prompt = editor::build_prompt(
         &interests,
-        &wire_result.items,
+        &wire_items,
         &grok_result.posts,
         grok_result.note.as_deref(),
+        weather_story.map(weather::facts).as_deref(),
         &today_long,
         settings.max_cards.clamp(8, 60),
         &store::paper_name(&store::owner_name(&settings)),
@@ -467,11 +517,14 @@ pub fn run() {
             set_profile,
             print_status,
             set_print_daily,
+            set_print_options,
             print_edition,
             get_schedule,
             set_schedule,
             refresh_edition,
             score_bug,
+            weather,
+            geocode,
             reader::open_reader,
         ])
         .setup(move |app| {

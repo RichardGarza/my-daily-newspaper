@@ -15,6 +15,9 @@ export default function Welcome({ profile, onDone }: Props) {
   const [draft, setDraft] = useState<ProfileDraft>({
     ownerName: profile.ownerName,
     city: profile.city,
+    weatherPlace: profile.weatherPlace,
+    weatherLat: profile.weatherLat,
+    weatherLon: profile.weatherLon,
     mlbTeamId: profile.mlbTeamId,
   });
   const [saving, setSaving] = useState(false);
